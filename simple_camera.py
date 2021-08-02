@@ -5,6 +5,13 @@ import gi
 import traceback
 gi.require_version('Gst', '1.0')
 
+flip_values = {
+    "0": "0",
+    "90": "1",
+    "180": "2",
+    "270": "3"
+}
+
 
 def on_message(bus: Gst.Bus, message: Gst.Message, loop: GObject.MainLoop):
     mtype = message.type
@@ -34,11 +41,17 @@ def add_IP_to_pipeline(default_pipeline, ip_addr):
     return default_pipeline.replace("127.0.0.1", ip_addr)
 
 
+def set_flip_method(default_pipeline, flip):
+
+    return default_pipeline.replace("flip-method=0", "flip-method=" + str(flip))
+
+
 # Initializes Gstreamer, it's variables, paths
 Gst.init(sys.argv)
 
+
 DEFAULT_PIPELINE = "nvarguscamerasrc sensor_id=0 ! video/x-raw(memory:NVMM),width=1280, height=720, framerate=120/1, format=NV12" +\
-    "! omxh264enc ! rtph264pay config-interval=1 pt=96 ! udpsink host=127.0.0.1 port=5000"
+    "! nvvidconv flip-method=0 ! omxh264enc ! rtph264pay config-interval=1 pt=96 ! udpsink host=127.0.0.1 port=5000"
 
 ap = argparse.ArgumentParser()
 ap.add_argument("-p", "--pipeline", required=False,
@@ -47,11 +60,16 @@ ap.add_argument("-p", "--pipeline", required=False,
 ap.add_argument("-ip", "--ip_addr", required=True,
                 default="127.0.0.1", help="IP to stream to")
 
+ap.add_argument("-flip", "--flip", required=False,
+                default="0", help="video flip in degrees")
+
 args = vars(ap.parse_args())
 
 command = args["pipeline"]
 
 command = add_IP_to_pipeline(command, args["ip_addr"])
+
+command = set_flip_method(command, flip_values[args["flip"]])
 
 print(command)
 
