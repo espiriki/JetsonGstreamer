@@ -6,10 +6,10 @@ import traceback
 gi.require_version('Gst', '1.0')
 
 flip_values = {
-    "0": "0",
-    "90": "1",
-    "180": "2",
-    "270": "3"
+    "0": 0,
+    "90": 1,
+    "180": 2,
+    "270": 3
 }
 
 
@@ -36,26 +36,10 @@ def on_message(bus: Gst.Bus, message: Gst.Message, loop: GObject.MainLoop):
     return True
 
 
-def add_IP_to_pipeline(default_pipeline, ip_addr):
-
-    return default_pipeline.replace("127.0.0.1", ip_addr)
-
-
-def set_flip_method(default_pipeline, flip):
-
-    return default_pipeline.replace("flip-method=0", "flip-method=" + str(flip))
-
-
 # Initializes Gstreamer, it's variables, paths
 Gst.init(sys.argv)
 
-
-DEFAULT_PIPELINE = "nvarguscamerasrc sensor_id=0 ! video/x-raw(memory:NVMM),width=1280, height=720, framerate=120/1, format=NV12" +\
-    "! nvvidconv flip-method=0 ! omxh264enc ! rtph264pay config-interval=1 pt=96 ! udpsink host=127.0.0.1 port=5000"
-
 ap = argparse.ArgumentParser()
-ap.add_argument("-p", "--pipeline", required=False,
-                default=DEFAULT_PIPELINE, help="Gstreamer pipeline without gst-launch")
 
 ap.add_argument("-ip", "--ip_addr", required=True,
                 default="127.0.0.1", help="IP to stream to")
@@ -65,19 +49,43 @@ ap.add_argument("-flip", "--flip", required=False,
 
 args = vars(ap.parse_args())
 
-command = args["pipeline"]
+# create pipeline object
+pipeline = Gst.Pipeline()
 
-command = add_IP_to_pipeline(command, args["ip_addr"])
+# create Gst.Element by plugin name
+src = Gst.ElementFactory.make("nvarguscamerasrc")
+src.set_property("sensor_id", 0)
 
-command = set_flip_method(command, flip_values[args["flip"]])
+camera_caps = Gst.Caps.from_string(
+    "video/x-raw(memory:NVMM),width=1280, height=720, framerate=120/1, format=NV12")
+camera_filter = Gst.ElementFactory.make("capsfilter", "filter")
+camera_filter.set_property("caps", camera_caps)
 
-print(command)
+nv_vid_conv = Gst.ElementFactory.make("nvvidconv")
+nv_vid_conv.set_property("flip-method", flip_values[args["flip"]])
 
-# Gst.Pipeline https://lazka.github.io/pgi-docs/Gst-1.0/classes/Pipeline.html
-# https://lazka.github.io/pgi-docs/Gst-1.0/functions.html#Gst.parse_launch
-pipeline = Gst.parse_launch(command)
+h_264_enc = Gst.ElementFactory.make("omxh264enc")
 
-# sys.exit(1)
+rtp_264_pay = Gst.ElementFactory.make("rtph264pay")
+rtp_264_pay.set_property("config-interval", 1)
+rtp_264_pay.set_property("pt", 96)
+
+udp_sink = Gst.ElementFactory.make("udpsink")
+udp_sink.set_property("host", args["ip_addr"])
+udp_sink.set_property("port", 5000)
+
+pipeline.add(src)
+pipeline.add(camera_filter)
+pipeline.add(nv_vid_conv)
+pipeline.add(h_264_enc)
+pipeline.add(rtp_264_pay)
+pipeline.add(udp_sink)
+
+src.link(camera_filter)
+camera_filter.link(nv_vid_conv)
+nv_vid_conv.link(h_264_enc)
+h_264_enc.link(rtp_264_pay)
+rtp_264_pay.link(udp_sink)
 
 # https://lazka.github.io/pgi-docs/Gst-1.0/classes/Bus.html
 bus = pipeline.get_bus()
