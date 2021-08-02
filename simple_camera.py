@@ -36,7 +36,11 @@ def on_message(bus: Gst.Bus, message: Gst.Message, loop: GObject.MainLoop):
     return True
 
 
-# Initializes Gstreamer, it's variables, paths
+def new_sample_callback(appsink, udata):
+    print("new sample")
+    return Gst.FlowReturn.OK
+
+
 Gst.init(sys.argv)
 
 ap = argparse.ArgumentParser()
@@ -57,7 +61,7 @@ src = Gst.ElementFactory.make("nvarguscamerasrc")
 src.set_property("sensor_id", 0)
 
 camera_caps = Gst.Caps.from_string(
-    "video/x-raw(memory:NVMM),width=1280, height=720, framerate=120/1, format=NV12")
+    "video/x-raw(memory:NVMM),width=1280, height=720, framerate=59/1, format=NV12")
 camera_filter = Gst.ElementFactory.make("capsfilter", "filter")
 camera_filter.set_property("caps", camera_caps)
 
@@ -65,6 +69,25 @@ nv_vid_conv = Gst.ElementFactory.make("nvvidconv")
 nv_vid_conv.set_property("flip-method", flip_values[args["flip"]])
 
 h_264_enc = Gst.ElementFactory.make("omxh264enc")
+
+tee = Gst.ElementFactory.make("tee")
+
+appsink = Gst.ElementFactory.make("appsink")
+appsink.set_property("emit-signals", True)
+appsink.set_property("drop", True)
+appsink.connect("new-sample", new_sample_callback, None)
+
+if not appsink:
+    print("appsink error")
+    sys.exit(1)
+
+
+caps = Gst.caps_from_string(
+    "video/x-raw(memory:NVMM),width=1280, height=720, framerate=60/1, format=NV12")
+
+appsink.set_property("caps", caps)
+
+queue = Gst.ElementFactory.make("queue")
 
 rtp_264_pay = Gst.ElementFactory.make("rtph264pay")
 rtp_264_pay.set_property("config-interval", 1)
@@ -74,18 +97,25 @@ udp_sink = Gst.ElementFactory.make("udpsink")
 udp_sink.set_property("host", args["ip_addr"])
 udp_sink.set_property("port", 5000)
 
+fakesink = Gst.ElementFactory.make("fakesink")
+
 pipeline.add(src)
-pipeline.add(camera_filter)
 pipeline.add(nv_vid_conv)
 pipeline.add(h_264_enc)
 pipeline.add(rtp_264_pay)
 pipeline.add(udp_sink)
+pipeline.add(tee)
+pipeline.add(queue)
+# pipeline.add(appsink)
+pipeline.add(camera_filter)
 
 src.link(camera_filter)
 camera_filter.link(nv_vid_conv)
-nv_vid_conv.link(h_264_enc)
+nv_vid_conv.link(tee)
+tee.link(h_264_enc)
 h_264_enc.link(rtp_264_pay)
 rtp_264_pay.link(udp_sink)
+
 
 # https://lazka.github.io/pgi-docs/Gst-1.0/classes/Bus.html
 bus = pipeline.get_bus()
