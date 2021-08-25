@@ -1,9 +1,7 @@
-from gi.repository import Gst, GObject
+from gstreamer import GstContext, GstPipeline, GstApp, Gst, GstVideo, GObject
 import argparse
 import sys
-import gi
 import traceback
-gi.require_version('Gst', '1.0')
 
 flip_values = {
     "0": 0,
@@ -35,13 +33,14 @@ def on_message(bus: Gst.Bus, message: Gst.Message, loop: GObject.MainLoop):
 
     return True
 
-
 def new_sample_callback(appsink, udata):
-    print("new sample")
+    sample = appsink.emit("pull-sample")
+    print("new_buffer")
+    print(sample)
     return Gst.FlowReturn.OK
 
 
-Gst.init(sys.argv)
+Gst.init(None)
 
 ap = argparse.ArgumentParser()
 
@@ -70,24 +69,14 @@ nv_vid_conv.set_property("flip-method", flip_values[args["flip"]])
 
 h_264_enc = Gst.ElementFactory.make("omxh264enc")
 
-tee = Gst.ElementFactory.make("tee")
-
-appsink = Gst.ElementFactory.make("appsink")
+appsink = Gst.ElementFactory.make("appsink","sink")
 appsink.set_property("emit-signals", True)
-appsink.set_property("drop", True)
-appsink.connect("new-sample", new_sample_callback, None)
+appsink.connect("new-sample", new_sample_callback, appsink)
 
-if not appsink:
-    print("appsink error")
-    sys.exit(1)
+videoconvert_1 = Gst.ElementFactory.make("nvvidconv")
+videoconvert_2 = Gst.ElementFactory.make("nvvidconv")
 
-
-caps = Gst.caps_from_string(
-    "video/x-raw(memory:NVMM),width=1280, height=720, framerate=60/1, format=NV12")
-
-appsink.set_property("caps", caps)
-
-queue = Gst.ElementFactory.make("queue")
+tee = Gst.ElementFactory.make("tee")
 
 rtp_264_pay = Gst.ElementFactory.make("rtph264pay")
 rtp_264_pay.set_property("config-interval", 1)
@@ -97,47 +86,76 @@ udp_sink = Gst.ElementFactory.make("udpsink")
 udp_sink.set_property("host", args["ip_addr"])
 udp_sink.set_property("port", 5000)
 
-fakesink = Gst.ElementFactory.make("fakesink")
+queue_1 = Gst.ElementFactory.make("queue")
+queue_2 = Gst.ElementFactory.make("queue")
+
+queue_1.set_property("max-size-buffers", 1)
+queue_1.set_property("leaky", 2)
+
+queue_2.set_property("max-size-buffers", 1)
+queue_2.set_property("leaky", 2)
+
+cairo = Gst.ElementFactory.make("cairooverlay")
+
+if not udp_sink or not rtp_264_pay or not videoconvert_1 or not videoconvert_2 \
+ or not appsink or not h_264_enc or not nv_vid_conv or not camera_filter or not src \
+ or not camera_caps or not tee or not queue_2 or not queue_1 or not cairo:
+    print("Not all elements could be created.")
+    exit(-1)
 
 pipeline.add(src)
+pipeline.add(camera_filter)
 pipeline.add(nv_vid_conv)
 pipeline.add(h_264_enc)
 pipeline.add(rtp_264_pay)
-pipeline.add(udp_sink)
+pipeline.add(appsink)
 pipeline.add(tee)
-pipeline.add(queue)
-# pipeline.add(appsink)
-pipeline.add(camera_filter)
+pipeline.add(queue_1)
+pipeline.add(queue_2)
+pipeline.add(udp_sink)
+pipeline.add(cairo)
 
-src.link(camera_filter)
-camera_filter.link(nv_vid_conv)
-nv_vid_conv.link(tee)
-tee.link(h_264_enc)
-h_264_enc.link(rtp_264_pay)
-rtp_264_pay.link(udp_sink)
+if not Gst.Element.link(src, camera_filter):
+    print("1 Elements could not be linked.")
+    exit(-1)
 
+if not Gst.Element.link(camera_filter, nv_vid_conv):
+    print("2 Elements could not be linked.")
+    exit(-1)
 
-# https://lazka.github.io/pgi-docs/Gst-1.0/classes/Bus.html
-bus = pipeline.get_bus()
+if not Gst.Element.link(nv_vid_conv, tee):
+    print("3 Elements could not be linked.")
+    exit(-1)
 
-# allow bus to emit messages to main thread
-bus.add_signal_watch()
+if not Gst.Element.link(tee, queue_1):
+    print("4 Elements could not be linked.")
+    exit(-1)
+
+if not Gst.Element.link(queue_1, appsink):
+    print("5 Elements could not be linked.")
+    exit(-1)
+
+if not Gst.Element.link(tee, queue_2):
+    print("6 Elements could not be linked.")
+    exit(-1)
+
+if not Gst.Element.link(queue_2, h_264_enc):
+    print("7 Elements could not be linked.")
+    exit(-1)
+
+if not Gst.Element.link(h_264_enc, rtp_264_pay):
+    print("8 Elements could not be linked.")
+    exit(-1)
+
+if not Gst.Element.link(rtp_264_pay, udp_sink):
+    print("9 Elements could not be linked.")
+    exit(-1)        
 
 # Start pipeline
 pipeline.set_state(Gst.State.PLAYING)
 
-# Init GObject loop to handle Gstreamer Bus Events
-loop = GObject.MainLoop()
-
-# Add handler to specific signal
-# https://lazka.github.io/pgi-docs/GObject-2.0/classes/Object.html#GObject.Object.connect
-bus.connect("message", on_message, loop)
-
-try:
-    loop.run()
-except Exception:
-    pipeline.set_state(Gst.State.NULL)
-    loop.quit()
+while True:
+    pass
 
 # Stop Pipeline
 pipeline.set_state(Gst.State.NULL)
