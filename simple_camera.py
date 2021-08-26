@@ -34,9 +34,11 @@ def on_message(bus: Gst.Bus, message: Gst.Message, loop: GObject.MainLoop):
     return True
 
 def new_sample_callback(appsink, udata):
+
     sample = appsink.emit("pull-sample")
-    print("new_buffer")
-    print(sample)
+
+    udata.set_property("text","label")
+
     return Gst.FlowReturn.OK
 
 
@@ -71,7 +73,6 @@ h_264_enc = Gst.ElementFactory.make("omxh264enc")
 
 appsink = Gst.ElementFactory.make("appsink","sink")
 appsink.set_property("emit-signals", True)
-appsink.connect("new-sample", new_sample_callback, appsink)
 
 videoconvert_1 = Gst.ElementFactory.make("nvvidconv")
 videoconvert_2 = Gst.ElementFactory.make("nvvidconv")
@@ -97,9 +98,15 @@ queue_2.set_property("leaky", 2)
 
 cairo = Gst.ElementFactory.make("cairooverlay")
 
+overlay  = Gst.ElementFactory.make("textoverlay")
+
+overlay.set_property("font-desc", "Sans, 32")
+
+appsink.connect("new-sample", new_sample_callback, overlay)
+
 if not udp_sink or not rtp_264_pay or not videoconvert_1 or not videoconvert_2 \
  or not appsink or not h_264_enc or not nv_vid_conv or not camera_filter or not src \
- or not camera_caps or not tee or not queue_2 or not queue_1 or not cairo:
+ or not camera_caps or not tee or not queue_2 or not queue_1 or not cairo or not overlay:
     print("Not all elements could be created.")
     exit(-1)
 
@@ -114,6 +121,7 @@ pipeline.add(queue_1)
 pipeline.add(queue_2)
 pipeline.add(udp_sink)
 pipeline.add(cairo)
+pipeline.add(overlay)
 
 if not Gst.Element.link(src, camera_filter):
     print("1 Elements could not be linked.")
@@ -139,8 +147,12 @@ if not Gst.Element.link(tee, queue_2):
     print("6 Elements could not be linked.")
     exit(-1)
 
-if not Gst.Element.link(queue_2, h_264_enc):
+if not Gst.Element.link(queue_2, overlay):
     print("7 Elements could not be linked.")
+    exit(-1)
+
+if not Gst.Element.link(overlay, h_264_enc):
+    print("11 Elements could not be linked.")
     exit(-1)
 
 if not Gst.Element.link(h_264_enc, rtp_264_pay):
