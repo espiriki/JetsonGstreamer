@@ -7,6 +7,7 @@ import tflite_runtime.interpreter as tflite
 import platform
 from PIL import Image
 import time
+import gstreamer.utils as utils
 
 flip_values = {
     "0": 0,
@@ -39,18 +40,105 @@ def on_message(bus: Gst.Bus, message: Gst.Message, loop: GObject.MainLoop):
     return True
 
 
-def new_sample_callback(appsink, udata):
-
-    sample = appsink.emit("pull-sample")
-
-    udata.set_property("text", "label")
-
-    return Gst.FlowReturn.OK
-
-
 def load_labels(filename):
     with open(filename, 'r') as f:
         return [line.strip() for line in f.readlines()]
+
+
+def setup_model(args, interpreter):
+
+    input_details = interpreter.get_input_details()
+    output_details = interpreter.get_output_details()
+
+    # check the type of the input tensor
+    floating_model = input_details[0]['dtype'] == np.float32
+
+    # NxHxWxC, H:1, W:2
+    height = input_details[0]['shape'][1]
+    width = input_details[0]['shape'][2]
+    img = Image.open(args["image"]).resize((width, height))
+
+    print(img)
+
+    # add N dim
+    input_data = np.expand_dims(img, axis=0)
+
+    if floating_model:
+
+        print("Float model!")
+
+        input_data = (np.float32(input_data) -
+                    args["input_mean"]) / args["input_std"]
+
+    get_labels(interpreter, input_data, floating_model, height, width, False)
+
+    return (width,height)
+
+
+def get_labels(interpreter, input_data, floating_model, height, width, convert):
+
+    input_details = interpreter.get_input_details()
+    output_details = interpreter.get_output_details()
+
+    if convert:
+
+        deserialized_bytes = np.frombuffer(input_data, dtype=np.uint8)
+        
+        deserialized_x = np.reshape(deserialized_bytes, newshape=(1, height, width, 3))
+
+        deserialized_y = (np.float32(deserialized_x) - 127.5) / 127.5
+
+        deserialized_z = deserialized_y.view('<f4')
+
+        interpreter.set_tensor(input_details[0]['index'], deserialized_z)
+
+    else:
+
+        interpreter.set_tensor(input_details[0]['index'], input_data)
+
+    start_time = time.time()
+    interpreter.invoke()
+
+    output_data = interpreter.get_tensor(output_details[0]['index'])
+    results = np.squeeze(output_data)
+
+    top_k = results.argsort()[-5:][::-1]
+    labels = load_labels(args["label_file"])
+
+    stop_time = time.time()
+
+    best_result = top_k[0]
+
+    split_string =  labels[best_result].split(",", 1)[0]
+
+    label =  split_string.split(":", 2)[1]
+
+    score = float(results[best_result])
+    
+    return score, label
+
+def new_sample_callback(appsink, interpreter):
+
+    sample = appsink.emit("pull-sample")
+
+    buffer = sample.get_buffer()
+
+    caps_format = sample.get_caps().get_structure(0)
+
+    frmt_str = caps_format.get_value('format')
+    video_format = GstVideo.VideoFormat.from_string(frmt_str)
+
+    w, h = caps_format.get_value('width'), caps_format.get_value('height')
+
+    c = utils.get_num_channels(video_format)
+
+    ret, map_info = buffer.map(Gst.MapFlags.READ)
+
+    results = get_labels(interpreter[0], map_info.data, True, w, h, True)
+
+    interpreter[1].set_property("text", "{} - {:.2f}%".format(results[1],results[0]*100))
+
+    return Gst.FlowReturn.OK
 
 
 Gst.init(None)
@@ -98,6 +186,13 @@ ap.add_argument(
 
 args = vars(ap.parse_args())
 
+
+interpreter = tflite.Interpreter(model_path=args["model_file"])
+
+interpreter.allocate_tensors()
+
+width, height = setup_model(args, interpreter)
+
 # create pipeline object
 pipeline = Gst.Pipeline()
 
@@ -118,7 +213,7 @@ h_264_enc = Gst.ElementFactory.make("omxh264enc")
 appsink = Gst.ElementFactory.make("appsink", "sink")
 appsink.set_property("emit-signals", True)
 
-videoconvert_1 = Gst.ElementFactory.make("nvvidconv")
+videoconvert_1 = Gst.ElementFactory.make("videoconvert")
 videoconvert_2 = Gst.ElementFactory.make("nvvidconv")
 
 tee = Gst.ElementFactory.make("tee")
@@ -146,16 +241,15 @@ overlay = Gst.ElementFactory.make("textoverlay")
 
 overlay.set_property("font-desc", "Sans, 32")
 
-appsink.connect("new-sample", new_sample_callback, overlay)
+appsink.connect("new-sample", new_sample_callback, (interpreter, overlay))
 
 my_format = "RGB"
-width = 640
-height = 480
 
-caps = Gst.Caps(Gst.Structure(
-    'video/x-raw', format=my_format, width=width, height=height))
+caps_str = "video/x-raw, width=(int){0}, height=(int){1}, format=(string){2}".format(width, height, my_format)
 
-appsink.set_property("caps", caps)
+appsink_caps = Gst.Caps.from_string(caps_str)
+
+appsink.set_property("caps", appsink_caps)
 
 if not udp_sink or not rtp_264_pay or not videoconvert_1 or not videoconvert_2 \
         or not appsink or not h_264_enc or not nv_vid_conv or not camera_filter or not src \
@@ -175,6 +269,7 @@ pipeline.add(queue_2)
 pipeline.add(udp_sink)
 pipeline.add(cairo)
 pipeline.add(overlay)
+pipeline.add(videoconvert_1)
 
 if not Gst.Element.link(src, camera_filter):
     print("1 Elements could not be linked.")
@@ -192,8 +287,12 @@ if not Gst.Element.link(tee, queue_1):
     print("4 Elements could not be linked.")
     exit(-1)
 
-if not Gst.Element.link(queue_1, appsink):
-    print("5 Elements could not be linked.")
+if not Gst.Element.link(queue_1, videoconvert_1):
+    print("4444 Elements could not be linked.")
+    exit(-1)
+
+if not Gst.Element.link(videoconvert_1, appsink):
+    print("1122 Elements could not be linked.")
     exit(-1)
 
 if not Gst.Element.link(tee, queue_2):
@@ -216,59 +315,17 @@ if not Gst.Element.link(rtp_264_pay, udp_sink):
     print("9 Elements could not be linked.")
     exit(-1)
 
-interpreter = tflite.Interpreter(model_path=args["model_file"])
 
-interpreter.allocate_tensors()
+# Start pipeline
+pipeline.set_state(Gst.State.PLAYING)
 
-input_details = interpreter.get_input_details()
-output_details = interpreter.get_output_details()
+try:
 
-# check the type of the input tensor
-floating_model = input_details[0]['dtype'] == np.float32
+    while True:
+        pass    
 
-# NxHxWxC, H:1, W:2
-height = input_details[0]['shape'][1]
-width = input_details[0]['shape'][2]
-img = Image.open(args["image"]).resize((width, height))
+except KeyboardInterrupt:
+    # Stop Pipeline
+    pipeline.set_state(Gst.State.NULL)
 
-print(img)
 
-# add N dim
-input_data = np.expand_dims(img, axis=0)
-
-if floating_model:
-
-    print("Float model!")
-
-    input_data = (np.float32(input_data) -
-                  args["input_mean"]) / args["input_std"]
-
-interpreter.set_tensor(input_details[0]['index'], input_data)
-
-start_time = time.time()
-interpreter.invoke()
-
-output_data = interpreter.get_tensor(output_details[0]['index'])
-results = np.squeeze(output_data)
-
-top_k = results.argsort()[-5:][::-1]
-labels = load_labels(args["label_file"])
-
-stop_time = time.time()
-
-for i in top_k:
-    if floating_model:
-        print('{:08.6f}: {}'.format(float(results[i]), labels[i]))
-    else:
-        print('{:08.6f}: {}'.format(float(results[i] / 255.0), labels[i]))
-
-print('time: {:.3f}ms'.format((stop_time - start_time) * 1000))
-
-# # Start pipeline
-# pipeline.set_state(Gst.State.PLAYING)
-
-# while True:
-#     pass
-
-# # Stop Pipeline
-# pipeline.set_state(Gst.State.NULL)
