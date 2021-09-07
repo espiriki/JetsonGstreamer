@@ -2,6 +2,11 @@ from gstreamer import GstContext, GstPipeline, GstApp, Gst, GstVideo, GObject
 import argparse
 import sys
 import traceback
+import numpy as np
+import tflite_runtime.interpreter as tflite
+import platform
+from PIL import Image
+import time
 
 flip_values = {
     "0": 0,
@@ -33,13 +38,19 @@ def on_message(bus: Gst.Bus, message: Gst.Message, loop: GObject.MainLoop):
 
     return True
 
+
 def new_sample_callback(appsink, udata):
 
     sample = appsink.emit("pull-sample")
 
-    udata.set_property("text","label")
+    udata.set_property("text", "label")
 
     return Gst.FlowReturn.OK
+
+
+def load_labels(filename):
+    with open(filename, 'r') as f:
+        return [line.strip() for line in f.readlines()]
 
 
 Gst.init(None)
@@ -51,6 +62,39 @@ ap.add_argument("-ip", "--ip_addr", required=True,
 
 ap.add_argument("-flip", "--flip", required=False,
                 default="0", help="video flip in degrees")
+
+ap.add_argument(
+    '-m',
+    '--model_file',
+    default='mobilenet_v1_1.0_224_quantized_1_default_1.tflite',
+    help='.tflite model to be executed',
+    required=True)
+
+ap.add_argument(
+    '-i',
+    '--image',
+    required=True,
+    help='image to be classified')
+
+ap.add_argument(
+    '--num_threads', default=1, type=int, help='number of threads')
+
+
+ap.add_argument(
+    '--input_mean',
+    default=127.5, type=float,
+    help='input_mean')
+
+ap.add_argument(
+    '--input_std',
+    default=127.5, type=float,
+    help='input standard deviation')
+
+ap.add_argument(
+    '-l',
+    '--label_file',
+    help='name of file containing labels',
+    required=True)
 
 args = vars(ap.parse_args())
 
@@ -71,7 +115,7 @@ nv_vid_conv.set_property("flip-method", flip_values[args["flip"]])
 
 h_264_enc = Gst.ElementFactory.make("omxh264enc")
 
-appsink = Gst.ElementFactory.make("appsink","sink")
+appsink = Gst.ElementFactory.make("appsink", "sink")
 appsink.set_property("emit-signals", True)
 
 videoconvert_1 = Gst.ElementFactory.make("nvvidconv")
@@ -98,15 +142,24 @@ queue_2.set_property("leaky", 2)
 
 cairo = Gst.ElementFactory.make("cairooverlay")
 
-overlay  = Gst.ElementFactory.make("textoverlay")
+overlay = Gst.ElementFactory.make("textoverlay")
 
 overlay.set_property("font-desc", "Sans, 32")
 
 appsink.connect("new-sample", new_sample_callback, overlay)
 
+my_format = "RGB"
+width = 640
+height = 480
+
+caps = Gst.Caps(Gst.Structure(
+    'video/x-raw', format=my_format, width=width, height=height))
+
+appsink.set_property("caps", caps)
+
 if not udp_sink or not rtp_264_pay or not videoconvert_1 or not videoconvert_2 \
- or not appsink or not h_264_enc or not nv_vid_conv or not camera_filter or not src \
- or not camera_caps or not tee or not queue_2 or not queue_1 or not cairo or not overlay:
+        or not appsink or not h_264_enc or not nv_vid_conv or not camera_filter or not src \
+        or not camera_caps or not tee or not queue_2 or not queue_1 or not cairo or not overlay:
     print("Not all elements could be created.")
     exit(-1)
 
@@ -161,13 +214,61 @@ if not Gst.Element.link(h_264_enc, rtp_264_pay):
 
 if not Gst.Element.link(rtp_264_pay, udp_sink):
     print("9 Elements could not be linked.")
-    exit(-1)        
+    exit(-1)
 
-# Start pipeline
-pipeline.set_state(Gst.State.PLAYING)
+interpreter = tflite.Interpreter(model_path=args["model_file"])
 
-while True:
-    pass
+interpreter.allocate_tensors()
 
-# Stop Pipeline
-pipeline.set_state(Gst.State.NULL)
+input_details = interpreter.get_input_details()
+output_details = interpreter.get_output_details()
+
+# check the type of the input tensor
+floating_model = input_details[0]['dtype'] == np.float32
+
+# NxHxWxC, H:1, W:2
+height = input_details[0]['shape'][1]
+width = input_details[0]['shape'][2]
+img = Image.open(args["image"]).resize((width, height))
+
+print(img)
+
+# add N dim
+input_data = np.expand_dims(img, axis=0)
+
+if floating_model:
+
+    print("Float model!")
+
+    input_data = (np.float32(input_data) -
+                  args["input_mean"]) / args["input_std"]
+
+interpreter.set_tensor(input_details[0]['index'], input_data)
+
+start_time = time.time()
+interpreter.invoke()
+
+output_data = interpreter.get_tensor(output_details[0]['index'])
+results = np.squeeze(output_data)
+
+top_k = results.argsort()[-5:][::-1]
+labels = load_labels(args["label_file"])
+
+stop_time = time.time()
+
+for i in top_k:
+    if floating_model:
+        print('{:08.6f}: {}'.format(float(results[i]), labels[i]))
+    else:
+        print('{:08.6f}: {}'.format(float(results[i] / 255.0), labels[i]))
+
+print('time: {:.3f}ms'.format((stop_time - start_time) * 1000))
+
+# # Start pipeline
+# pipeline.set_state(Gst.State.PLAYING)
+
+# while True:
+#     pass
+
+# # Stop Pipeline
+# pipeline.set_state(Gst.State.NULL)
