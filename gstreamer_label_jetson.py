@@ -206,11 +206,7 @@ queue_1.set_property("leaky", 2)
 queue_2.set_property("max-size-buffers", 1)
 queue_2.set_property("leaky", 2)
 
-cairo = Gst.ElementFactory.make("cairooverlay")
-
 overlay = Gst.ElementFactory.make("textoverlay")
-
-nv_tee = Gst.ElementFactory.make("nvtee")
 
 overlay.set_property("font-desc", "Sans, 32")
 
@@ -234,9 +230,10 @@ conv_caps = Gst.Caps.from_string(conv_caps_str)
 conv_filter = Gst.ElementFactory.make("capsfilter")
 conv_filter.set_property("caps", conv_caps)
 
-if not udp_sink or not rtp_264_pay or not videoconvert_1 or not videoconvert_2 \
-        or not appsink or not h_264_enc or not nv_vid_conv or not camera_filter or not src \
-        or not camera_caps or not tee or not queue_2 or not queue_1 or not cairo or not overlay:
+if not src or not camera_filter or not nv_vid_conv or not h_264_enc \
+        or not rtp_264_pay or not tee or not queue_1 or not queue_2 or not udp_sink \
+        or not overlay or not videoconvert_1 or not scale or not appsink \
+        or not conv_filter:
     print("Not all elements could be created.")
     exit(-1)
 
@@ -249,12 +246,10 @@ pipeline.add(tee)
 pipeline.add(queue_1)
 pipeline.add(queue_2)
 pipeline.add(udp_sink)
-pipeline.add(cairo)
 pipeline.add(overlay)
 pipeline.add(videoconvert_1)
 pipeline.add(scale)
 pipeline.add(appsink)
-pipeline.add(nv_tee)
 pipeline.add(conv_filter)
 
 if not Gst.Element.link(src, camera_filter):
