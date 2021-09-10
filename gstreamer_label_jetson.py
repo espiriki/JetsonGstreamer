@@ -44,10 +44,15 @@ def new_sample_callback(appsink, data):
 
     video_buffer = get_video_buffer(sample)
 
+    format_str = caps_format.get_value('format')
+    video_format = GstVideo.VideoFormat.from_string(format_str)
+
+    num_channels = utils.get_num_channels(video_format)
+
     if video_buffer is not None:
 
         score, label = get_labels(
-            interpreter, video_buffer, width, height, labels)
+            interpreter, video_buffer, width, height, labels, num_channels)
 
         overlay.set_property(
             "text", "{} - {:.2f}%".format(label, score * 100))
@@ -116,8 +121,9 @@ def main(ap):
 
     labels = load_labels(args["label_file"])
 
-    appsink.connect("new-sample", new_sample_callback,
-                    (interpreter, overlay, labels))
+    my_data = [interpreter, overlay, labels]
+
+    appsink.connect("new-sample", new_sample_callback, my_data)
 
     scale = Gst.ElementFactory.make("videoscale")
 

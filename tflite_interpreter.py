@@ -51,9 +51,7 @@ def convert_to_float32(data, num_channels, height, width):
     return data
 
 
-def get_labels(interpreter, input_data, height, width, labels):
-
-    num_channels = 3
+def get_labels(interpreter, input_data, height, width, labels, num_channels):
 
     input_details = interpreter.get_input_details()
     output_details = interpreter.get_output_details()
