@@ -9,6 +9,10 @@ from PIL import Image
 import time
 import gstreamer.utils as utils
 
+video_width = 1280
+video_height = 720
+framerate = 60
+
 flip_values = {
     "0": 0,
     "90": 1,
@@ -165,8 +169,10 @@ pipeline = Gst.Pipeline()
 src = Gst.ElementFactory.make("nvarguscamerasrc")
 src.set_property("sensor_id", 0)
 
-camera_caps = Gst.Caps.from_string(
-    "video/x-raw(memory:NVMM),width=1280, height=720, framerate=59/1, format=NV12")
+camera_caps_str = "video/x-raw(memory:NVMM),width={}, height={}, framerate={}/1, format=NV12".format(
+    video_width, video_height, framerate)
+
+camera_caps = Gst.Caps.from_string(camera_caps_str)
 camera_filter = Gst.ElementFactory.make("capsfilter", "filter")
 camera_filter.set_property("caps", camera_caps)
 
@@ -222,6 +228,12 @@ appsink_caps = Gst.Caps.from_string(caps_str)
 
 appsink.set_property("caps", appsink_caps)
 
+conv_caps_str = "video/x-raw,width={}, height={}".format(
+    video_width, video_height)
+conv_caps = Gst.Caps.from_string(conv_caps_str)
+conv_filter = Gst.ElementFactory.make("capsfilter")
+conv_filter.set_property("caps", conv_caps)
+
 if not udp_sink or not rtp_264_pay or not videoconvert_1 or not videoconvert_2 \
         or not appsink or not h_264_enc or not nv_vid_conv or not camera_filter or not src \
         or not camera_caps or not tee or not queue_2 or not queue_1 or not cairo or not overlay:
@@ -243,6 +255,7 @@ pipeline.add(videoconvert_1)
 pipeline.add(scale)
 pipeline.add(appsink)
 pipeline.add(nv_tee)
+pipeline.add(conv_filter)
 
 if not Gst.Element.link(src, camera_filter):
     print("1 Elements could not be linked.")
@@ -252,45 +265,48 @@ if not Gst.Element.link(camera_filter, nv_vid_conv):
     print("2 Elements could not be linked.")
     exit(-1)
 
-if not Gst.Element.link(nv_vid_conv, tee):
+if not Gst.Element.link(nv_vid_conv, conv_filter):
     print("3 Elements could not be linked.")
     exit(-1)
 
-if not Gst.Element.link(tee, queue_2):
+if not Gst.Element.link(conv_filter, tee):
     print("4 Elements could not be linked.")
     exit(-1)
 
-if not Gst.Element.link(queue_2, overlay):
+if not Gst.Element.link(tee, queue_2):
     print("5 Elements could not be linked.")
     exit(-1)
 
-if not Gst.Element.link(overlay, h_264_enc):
+if not Gst.Element.link(queue_2, overlay):
     print("6 Elements could not be linked.")
     exit(-1)
 
-if not Gst.Element.link(h_264_enc, rtp_264_pay):
+if not Gst.Element.link(overlay, h_264_enc):
     print("7 Elements could not be linked.")
     exit(-1)
 
-if not Gst.Element.link(rtp_264_pay, udp_sink):
+if not Gst.Element.link(h_264_enc, rtp_264_pay):
     print("8 Elements could not be linked.")
     exit(-1)
 
-
-if not Gst.Element.link(tee, queue_1):
+if not Gst.Element.link(rtp_264_pay, udp_sink):
     print("9 Elements could not be linked.")
     exit(-1)
 
-if not Gst.Element.link(queue_1, scale):
+if not Gst.Element.link(tee, queue_1):
     print("10 Elements could not be linked.")
     exit(-1)
 
-if not Gst.Element.link(scale, videoconvert_1):
+if not Gst.Element.link(queue_1, scale):
     print("11 Elements could not be linked.")
     exit(-1)
 
-if not Gst.Element.link(videoconvert_1, appsink):
+if not Gst.Element.link(scale, videoconvert_1):
     print("12 Elements could not be linked.")
+    exit(-1)
+
+if not Gst.Element.link(videoconvert_1, appsink):
+    print("13 Elements could not be linked.")
     exit(-1)
 
 # Start pipeline
