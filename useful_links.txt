@@ -1,0 +1,7 @@
+http://lifestyletransfer.com/how-to-use-gstreamer-appsink-in-python/
+
+https://valadoc.org/gstreamer-1.0/Gst.FlowReturn.html
+
+https://stackoverflow.com/questions/25773551/how-to-access-the-data-of-a-gstreamer-buffer-in-python
+
+https://github.com/tensorflow/tensorflow/blob/master/tensorflow/lite/examples/python/label_image.py
