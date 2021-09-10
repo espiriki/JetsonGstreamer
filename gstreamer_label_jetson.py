@@ -104,7 +104,7 @@ def main(ap):
 
     udp_sink = Gst.ElementFactory.make("udpsink")
     udp_sink.set_property("host", args["ip_addr"])
-    udp_sink.set_property("port", 5000)
+    udp_sink.set_property("port", int(args["port"]))
 
     queue_1 = Gst.ElementFactory.make("queue")
     queue_2 = Gst.ElementFactory.make("queue")
@@ -257,6 +257,12 @@ if __name__ == '__main__':
         '-l',
         '--label_file',
         help='name of file containing labels',
+        required=True)
+
+    ap.add_argument(
+        '-p',
+        '--port',
+        help='port to stream the video to',
         required=True)
 
     main(ap)
