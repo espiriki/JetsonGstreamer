@@ -72,7 +72,7 @@ def get_labels(interpreter, input_data, height, width, labels):
 
     stop_time = time.time()
 
-    print('time: {:.3f} ms'.format((stop_time - start_time) * 1000))
+    print('Inference time: {:.3f} ms'.format((stop_time - start_time) * 1000))
 
     best_result = top_k[0]
 
