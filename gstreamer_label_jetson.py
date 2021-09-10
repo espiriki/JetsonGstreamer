@@ -26,7 +26,9 @@ def load_labels(filename):
         return [line.strip() for line in f.readlines()]
 
 
-def setup_model(args, interpreter):
+def setup_inference(args, interpreter):
+
+    interpreter.allocate_tensors()
 
     input_details = interpreter.get_input_details()
     output_details = interpreter.get_output_details()
@@ -154,18 +156,18 @@ ap.add_argument(
 
 args = vars(ap.parse_args())
 
+#Load the modelfile
 interpreter = tflite.Interpreter(model_path=args["model_file"])
 
-interpreter.allocate_tensors()
+#Sets up the inference enginer
+width, height = setup_inference(args, interpreter)
 
-width, height = setup_model(args, interpreter)
-
+#Init Gstreamer plugin
 Gst.init(None)
 
-# create pipeline object
-pipeline = Gst.Pipeline()
 
-# create Gst.Element by plugin name
+#Create all gst elements and set the necessary properties
+
 src = Gst.ElementFactory.make("nvarguscamerasrc")
 src.set_property("sensor_id", 0)
 
@@ -221,11 +223,11 @@ caps_str = "video/x-raw, width=(int){0}, height=(int){1}, format=(string){2}".fo
     width, height, "RGB")
 
 appsink_caps = Gst.Caps.from_string(caps_str)
-
 appsink.set_property("caps", appsink_caps)
 
 conv_caps_str = "video/x-raw,width={}, height={}".format(
     video_width, video_height)
+
 conv_caps = Gst.Caps.from_string(conv_caps_str)
 conv_filter = Gst.ElementFactory.make("capsfilter")
 conv_filter.set_property("caps", conv_caps)
@@ -236,6 +238,11 @@ if not src or not camera_filter or not nv_vid_conv or not h_264_enc \
         or not conv_filter:
     print("Not all elements could be created.")
     exit(-1)
+
+
+#Add all elements to the current pipeline
+
+pipeline = Gst.Pipeline()
 
 pipeline.add(src)
 pipeline.add(camera_filter)
@@ -251,6 +258,8 @@ pipeline.add(videoconvert_1)
 pipeline.add(scale)
 pipeline.add(appsink)
 pipeline.add(conv_filter)
+
+#Link all GST elements together
 
 if not Gst.Element.link(src, camera_filter):
     print("1 Elements could not be linked.")
@@ -308,10 +317,10 @@ if not Gst.Element.link(videoconvert_1, appsink):
 pipeline.set_state(Gst.State.PLAYING)
 
 try:
-
     while True:
         pass
 
 except KeyboardInterrupt:
+
     # Stop Pipeline
     pipeline.set_state(Gst.State.NULL)
