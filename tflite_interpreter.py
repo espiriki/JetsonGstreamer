@@ -11,7 +11,7 @@ def load_labels(filename):
 def setup_inference(args):
 
     # Load the modelfile
-    interpreter = tflite.Interpreter(model_path=args["model_file"])
+    interpreter = tflite.Interpreter(model_path=args["model_file"], num_threads=args["num_threads"])
 
     interpreter.allocate_tensors()
 
