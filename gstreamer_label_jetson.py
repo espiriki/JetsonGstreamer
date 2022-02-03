@@ -3,6 +3,8 @@ from tflite_interpreter import load_labels, setup_inference, extract_label, conv
 import gstreamer.utils as utils
 import argparse
 import sys
+import gi
+gi.require_foreign('cairo')
 
 video_width = 1280
 video_height = 720
@@ -63,6 +65,24 @@ def new_sample_callback(appsink, data):
         return Gst.FlowReturn.ERROR
 
 
+def on_draw(overlay, cr, _timestamp, _duration, user_data):
+
+    """Each time the 'draw' signal is emitted"""
+
+    scale = 2 * (((_timestamp / 10000000) % 70) + 30) / 100
+    cr.translate (1280 / 2, (720 / 2) - 30)
+
+    cr.scale(scale, scale)
+
+    cr.move_to(0,0)
+    cr.curve_to(0, -30, -50, -30, -50, 0)
+    cr.curve_to(-50, 30, 0, 35, 0, 60)
+    cr.curve_to(0, 35, 50, 30, 50, 0)
+    cr.curve_to(50, -30, 0, -30, 0, 0)
+
+    cr.set_source_rgba (0.9, 0.0, 0.1, 0.7)
+    cr.fill()
+
 def main(ap):
 
     args = vars(ap.parse_args())
@@ -86,6 +106,9 @@ def main(ap):
     camera_filter.set_property("caps", camera_caps)
 
     nv_vid_conv = Gst.ElementFactory.make("nvvidconv")
+    nv_vid_conv_2 = Gst.ElementFactory.make("nvvidconv")
+    nv_vid_conv_3 = Gst.ElementFactory.make("nvvidconv")
+
     nv_vid_conv.set_property("flip-method", flip_values[args["flip"]])
 
     h_264_enc = Gst.ElementFactory.make("omxh264enc")
@@ -117,6 +140,8 @@ def main(ap):
 
     overlay = Gst.ElementFactory.make("textoverlay")
 
+    cairo_overlay = Gst.ElementFactory.make("cairooverlay")
+
     overlay.set_property("font-desc", "Sans, 32")
 
     labels = load_labels(args["label_file"])
@@ -124,6 +149,8 @@ def main(ap):
     my_data = [interpreter, overlay, labels]
 
     appsink.connect("new-sample", new_sample_callback, my_data)
+
+    cairo_overlay.connect('draw', on_draw, my_data)
 
     scale = Gst.ElementFactory.make("videoscale")
 
@@ -143,7 +170,7 @@ def main(ap):
     if not src or not camera_filter or not nv_vid_conv or not h_264_enc \
             or not rtp_264_pay or not tee or not queue_1 or not queue_2 or not udp_sink \
             or not overlay or not videoconvert_1 or not scale or not appsink \
-            or not conv_filter:
+            or not conv_filter or not cairo_overlay or not nv_vid_conv_2 or not nv_vid_conv_3:
         print("Not all elements could be created.")
         exit(-1)
 
@@ -165,6 +192,9 @@ def main(ap):
     pipeline.add(scale)
     pipeline.add(appsink)
     pipeline.add(conv_filter)
+    pipeline.add(cairo_overlay)
+    pipeline.add(nv_vid_conv_2)
+    pipeline.add(nv_vid_conv_3)
 
     # Link all GST elements together
 
@@ -188,36 +218,44 @@ def main(ap):
         print("5 Elements could not be linked.")
         exit(-1)
 
-    if not Gst.Element.link(queue_2, overlay):
+    if not Gst.Element.link(queue_2, nv_vid_conv_2):
         print("6 Elements could not be linked.")
         exit(-1)
 
-    if not Gst.Element.link(overlay, h_264_enc):
+    if not Gst.Element.link(nv_vid_conv_2, cairo_overlay):
         print("7 Elements could not be linked.")
         exit(-1)
 
-    if not Gst.Element.link(h_264_enc, rtp_264_pay):
+    if not Gst.Element.link(cairo_overlay, nv_vid_conv_3):
         print("8 Elements could not be linked.")
         exit(-1)
 
-    if not Gst.Element.link(rtp_264_pay, udp_sink):
+    if not Gst.Element.link(nv_vid_conv_3, h_264_enc):
         print("9 Elements could not be linked.")
         exit(-1)
 
-    if not Gst.Element.link(tee, queue_1):
+    if not Gst.Element.link(h_264_enc, rtp_264_pay):
         print("10 Elements could not be linked.")
         exit(-1)
 
-    if not Gst.Element.link(queue_1, scale):
+    if not Gst.Element.link(rtp_264_pay, udp_sink):
         print("11 Elements could not be linked.")
         exit(-1)
 
-    if not Gst.Element.link(scale, videoconvert_1):
+    if not Gst.Element.link(tee, queue_1):
         print("12 Elements could not be linked.")
         exit(-1)
 
-    if not Gst.Element.link(videoconvert_1, appsink):
+    if not Gst.Element.link(queue_1, scale):
         print("13 Elements could not be linked.")
+        exit(-1)
+
+    if not Gst.Element.link(scale, videoconvert_1):
+        print("14 Elements could not be linked.")
+        exit(-1)
+
+    if not Gst.Element.link(videoconvert_1, appsink):
+        print("15 Elements could not be linked.")
         exit(-1)
 
     # Start pipeline
