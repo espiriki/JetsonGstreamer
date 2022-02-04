@@ -1,5 +1,5 @@
 from gstreamer import GstContext, GstPipeline, GstApp, Gst, GstVideo, GObject
-from tflite_interpreter import load_labels, setup_inference, extract_label, convert_to_float32, get_labels
+from tflite_interpreter import load_labels, setup_inference, extract_label, convert_to_float32, get_bounding_boxes
 import gstreamer.utils as utils
 import argparse
 import sys
@@ -17,6 +17,7 @@ flip_values = {
     "270": 3
 }
 
+bounding_box_data = {}
 
 def get_video_buffer(sample):
 
@@ -33,9 +34,7 @@ def new_sample_callback(appsink, data):
 
     interpreter = data[0]
 
-    overlay = data[1]
-
-    labels = data[2]
+    labels = data[1]
 
     sample = appsink.emit("pull-sample")
 
@@ -53,11 +52,8 @@ def new_sample_callback(appsink, data):
 
     if video_buffer is not None:
 
-        score, label = get_labels(
-            interpreter, video_buffer, width, height, labels, num_channels)
-
-        overlay.set_property(
-            "text", "{} - {:.2f}%".format(label, score * 100))
+        get_bounding_boxes(
+            interpreter, video_buffer, width, height, labels, num_channels, bounding_box_data)
 
         return Gst.FlowReturn.OK
 
@@ -67,21 +63,23 @@ def new_sample_callback(appsink, data):
 
 def on_draw(overlay, cr, _timestamp, _duration, user_data):
 
-    """Each time the 'draw' signal is emitted"""
+    cr.new_path()
 
-    scale = 2 * (((_timestamp / 10000000) % 70) + 30) / 100
-    cr.translate (1280 / 2, (720 / 2) - 30)
+    cr.set_source_rgb(1, 0, 0)
+    cr.set_line_width(5)
 
-    cr.scale(scale, scale)
+    for item in user_data.items():
 
-    cr.move_to(0,0)
-    cr.curve_to(0, -30, -50, -30, -50, 0)
-    cr.curve_to(-50, 30, 0, 35, 0, 60)
-    cr.curve_to(0, 35, 50, 30, 50, 0)
-    cr.curve_to(50, -30, 0, -30, 0, 0)
+        value =item[1]
 
-    cr.set_source_rgba (0.9, 0.0, 0.1, 0.7)
-    cr.fill()
+        print(item[0])
+        cr.move_to(value[0],value[2]) # xmin, ymin
+        cr.line_to(value[0],value[3]) # xmin, ymax
+        cr.line_to(value[1],value[3]) # xmax, ymax
+        cr.line_to(value[1],value[2]) # xmax, ymin
+        cr.line_to(value[0],value[2]) # xmin, ymin
+
+    cr.stroke_preserve()
 
 def main(ap):
 
@@ -138,19 +136,15 @@ def main(ap):
     queue_2.set_property("max-size-buffers", 1)
     queue_2.set_property("leaky", 2)
 
-    overlay = Gst.ElementFactory.make("textoverlay")
-
     cairo_overlay = Gst.ElementFactory.make("cairooverlay")
-
-    overlay.set_property("font-desc", "Sans, 32")
 
     labels = load_labels(args["label_file"])
 
-    my_data = [interpreter, overlay, labels]
+    my_data = [interpreter, labels]
 
     appsink.connect("new-sample", new_sample_callback, my_data)
 
-    cairo_overlay.connect('draw', on_draw, my_data)
+    cairo_overlay.connect('draw', on_draw, bounding_box_data)
 
     scale = Gst.ElementFactory.make("videoscale")
 
@@ -169,7 +163,7 @@ def main(ap):
 
     if not src or not camera_filter or not nv_vid_conv or not h_264_enc \
             or not rtp_264_pay or not tee or not queue_1 or not queue_2 or not udp_sink \
-            or not overlay or not videoconvert_1 or not scale or not appsink \
+            or not videoconvert_1 or not scale or not appsink \
             or not conv_filter or not cairo_overlay or not nv_vid_conv_2 or not nv_vid_conv_3:
         print("Not all elements could be created.")
         exit(-1)
@@ -187,7 +181,6 @@ def main(ap):
     pipeline.add(queue_1)
     pipeline.add(queue_2)
     pipeline.add(udp_sink)
-    pipeline.add(overlay)
     pipeline.add(videoconvert_1)
     pipeline.add(scale)
     pipeline.add(appsink)

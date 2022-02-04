@@ -50,32 +50,50 @@ def convert_to_float32(data, num_channels, height, width):
 
     return data
 
+def convert_to_uint8(data, num_channels, height, width):
 
-def get_labels(interpreter, input_data, height, width, labels, num_channels):
+    data = np.frombuffer(data, dtype=np.uint8)
+
+    data = np.reshape(
+        data, newshape=(1, height, width, num_channels))
+
+    # data = np.expand_dims(data, axis=0)
+
+    # data = np.uint8((np.uint8(data) * (1.0 / 127.5)) - 1.0)
+
+    return data    
+
+
+def get_bounding_boxes(interpreter, input_data, height, width, labels, num_channels, bbx_dict):
 
     input_details = interpreter.get_input_details()
     output_details = interpreter.get_output_details()
 
-    float_data = convert_to_float32(input_data, num_channels, height, width)
+    uint8_data = convert_to_uint8(input_data, num_channels, height, width)
 
-    interpreter.set_tensor(input_details[0]['index'], float_data)
+    interpreter.set_tensor(input_details[0]['index'], uint8_data)
 
     start_time = time.time()
     interpreter.invoke()
 
     output_data = interpreter.get_tensor(output_details[0]['index'])
-    results = np.squeeze(output_data)
 
-    top_k = results.argsort()[-5:][::-1]
+    boxes = interpreter.get_tensor(output_details[0]['index'])[0] # Bounding box coordinates of detected objects
+    classes = interpreter.get_tensor(output_details[1]['index'])[0] # Class index of detected objects
+    scores = interpreter.get_tensor(output_details[2]['index'])[0] # Confidence of detected objects
 
-    stop_time = time.time()
+    for i in range(len(scores)):
+        if ((scores[i] > 0.5) and (scores[i] <= 1.0)):
 
-    print('Inference time: {:.3f} ms'.format((stop_time - start_time) * 1000))
+            # Get bounding box coordinates and draw box
+            # Interpreter can return coordinates that are outside of image dimensions, need to force them to be within image using max() and min()
+            ymin = int(max(1,(boxes[i][0] * 720)))
+            xmin = int(max(1,(boxes[i][1] * 1280)))
+            ymax = int(min(height,(boxes[i][2] * 720)))
+            xmax = int(min(width,(boxes[i][3] * 1280)))
 
-    best_result = top_k[0]
+            object_name = labels[int(classes[i])] # Look up object name from "labels" array using class index
 
-    label = extract_label(best_result, labels)
+            bbx_dict[str(object_name)] = (xmin, xmax, ymin, ymax)
 
-    score = float(results[best_result])
-
-    return score, label
+    return bbx_dict
