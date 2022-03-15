@@ -1,11 +1,11 @@
 from gstreamer import GstContext, GstPipeline, GstApp, Gst, GstVideo, GObject
-from tflite_interpreter import load_labels, setup_inference, extract_label, convert_to_float32, get_labels
+from tflite_interpreter import setup_inference, extract_label, convert_to_float32, get_labels
 import gstreamer.utils as utils
 import argparse
 import sys
 
-video_width = 1280
-video_height = 720
+video_width = 640
+video_height = 640
 framerate = 60
 
 flip_values = {
@@ -33,8 +33,6 @@ def new_sample_callback(appsink, data):
 
     overlay = data[1]
 
-    labels = data[2]
-
     sample = appsink.emit("pull-sample")
 
     caps_format = sample.get_caps().get_structure(0)
@@ -52,7 +50,7 @@ def new_sample_callback(appsink, data):
     if video_buffer is not None:
 
         score, label = get_labels(
-            interpreter, video_buffer, width, height, labels, num_channels)
+            interpreter, video_buffer, width, height, num_channels)
 
         overlay.set_property(
             "text", "{} - {:.2f}%".format(label, score * 100))
@@ -119,9 +117,7 @@ def main(ap):
 
     overlay.set_property("font-desc", "Sans, 32")
 
-    labels = load_labels(args["label_file"])
-
-    my_data = [interpreter, overlay, labels]
+    my_data = [interpreter, overlay]
 
     appsink.connect("new-sample", new_sample_callback, my_data)
 
@@ -252,12 +248,6 @@ if __name__ == '__main__':
 
     ap.add_argument(
         '--num_threads', default=2, type=int, help='number of threads')
-
-    ap.add_argument(
-        '-l',
-        '--label_file',
-        help='name of file containing labels',
-        required=True)
 
     ap.add_argument(
         '-p',
