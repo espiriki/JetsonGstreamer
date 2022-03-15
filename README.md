@@ -3,10 +3,11 @@ Gstreamer TFLite Demo
 Runs a gstreamer pipeline that streams the video over UDP and set the label
 of the image using TFLite inference engine
 
+The --flip argument is used to flip the video (steps of 90 degrees)
 
-To run:
+To run (change 127.0.0.1 to the IP of your PC):
 
-    python3 gstreamer_label_jetson.py --ip 127.0.0.1 --m mobilenet_v1_1.0_224.tflite --l mobilenet_v1_1.0_224/labels.txt --flip 180 --port 5000
+    python3 gstreamer_label_jetson.py --ip 127.0.0.1 --m final_it_EfficientNetB0_52_96_percent_v2_best_model.h5.tflite --flip 180 --port 5000
 
 To watch the stream:
 
